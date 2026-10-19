@@ -2,20 +2,20 @@
 
 🔍 DNS resolution for mail, in Ruby.
 
-**mailresolver** is a small, injectable DNS client for mail libraries — TXT, A/AAAA, MX, PTR, and CNAME lookups.
+**mailresolver** is a small, injectable DNS client for mail libraries — TXT, A/AAAA, MX, PTR, CNAME, and NS lookups.
 
 For mail libraries and the apps that use them: SPF/DKIM/DMARC/MTA-STS checks that need a missing record told apart from a server that couldn't answer, apps running several mail libraries that want one shared resolver instead of one apiece, test suites that want to fake DNS without touching a network.
 
 **mailresolver** handles:
 
-- TXT, A, AAAA, MX, PTR, and CNAME lookups, plus a merged `addresses` for A+AAAA
+- TXT, A, AAAA, MX, PTR, CNAME, and NS lookups, plus a merged `addresses` for A+AAAA
 - a three-way error taxonomy — `NotFound`, `ServerFailure`, `Timeout` — instead of collapsing every failure into an empty answer
 - one shared resolver across every mail library in your app, multiplexed over dnsruby's single I/O thread
 - configurable retry/timeout schedule
 - DNSSEC validation and answer caching off, unconditionally, for callers that have no way to act on either
 - test doubles — a hash-backed fake and a real loopback nameserver — so a suite never needs the network
 
-> Not a general-purpose DNS client — five record types and three errors, built for what mail authentication needs.
+> Not a general-purpose DNS client — six record types and three errors, built for what mail authentication needs.
 
 ## Contents
 
@@ -57,6 +57,7 @@ resolver.addresses("example.com")     # => ["203.0.113.10", "2001:db8::1"]
 resolver.mx("example.com")            # => ["mx1.example.com", "mx2.example.com"], sorted by preference
 resolver.ptr("203.0.113.10")          # => ["mail.example.com"]
 resolver.cname("www.example.com")     # => ["example.com"]
+resolver.ns("example.com")            # => ["ns1.example.net", "ns2.example.net"]
 ```
 
 `addresses` merges A and AAAA. A family the name doesn't publish contributes nothing to it rather than ending the lookup — but a name that doesn't exist at all raises `NoSuchName`, and a nameserver that couldn't answer still raises, same as every other method here.
@@ -106,7 +107,7 @@ DNSSEC validation and dnsruby's answer cache are both off, unconditionally. DNSS
 
 ## Custom Resolvers
 
-Anything that responds to `txt`, `a`, `aaaa`, `addresses`, `mx`, `ptr`, and `cname` — raising the three errors above — is a drop-in replacement. You don't have to write one: see [Test Doubles](#test-doubles).
+Anything that responds to `txt`, `a`, `aaaa`, `addresses`, `mx`, `ptr`, `cname`, and `ns` — raising the three errors above — is a drop-in replacement. You don't have to write one: see [Test Doubles](#test-doubles).
 
 ## Test Doubles
 

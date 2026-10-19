@@ -47,6 +47,10 @@ module MailResolver
         lookup(name, :cname)
       end
 
+      def ns(name)
+        lookup(name, :ns)
+      end
+
       private
         def family(type, name)
           lookup(name, type)

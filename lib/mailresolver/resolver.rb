@@ -57,6 +57,10 @@ module MailResolver
       records("CNAME", name).map { |record| record.domainname.to_s }
     end
 
+    def ns(name)
+      records("NS", name).map { |record| record.domainname.to_s }
+    end
+
     private
       def family(type, name)
         records(type, name).map { |record| record.address.to_s.downcase }

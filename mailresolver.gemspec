@@ -8,7 +8,7 @@ Gem::Specification.new do |spec|
   spec.authors = [ "Simon Lev" ]
 
   spec.summary = "DNS resolution for mail, in Ruby."
-  spec.description = "DNS resolution for mail, in Ruby. **mailresolver** is a small, injectable DNS client for mail libraries — TXT, A/AAAA, MX, PTR, and CNAME lookups."
+  spec.description = "DNS resolution for mail, in Ruby. **mailresolver** is a small, injectable DNS client for mail libraries — TXT, A/AAAA, MX, PTR, CNAME, and NS lookups."
 
   spec.homepage = "https://github.com/mailpiece/mailresolver"
   spec.license = "MIT"
