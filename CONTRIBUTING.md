@@ -1,46 +1,52 @@
-# Contributing
+# How to contribute to mailresolver
 
-First, thanks for wanting to contribute. You're awesome! 🫶
+mailresolver uses GitHub
+[discussions](https://github.com/mailpiece/mailresolver/discussions) to track
+feature requests and questions, rather than [the issue
+tracker](https://github.com/mailpiece/mailresolver/issues). If you're
+considering opening an issue or pull request, please open a discussion instead.
 
-## Help
+Whenever a discussion leads to an actionable and well-understood task, we'll
+move it to the issue tracker where it can be worked on.
 
-We're not able to provide support through GitHub Issues.
+This is a little different than how some other projects work, but it makes it
+easier for us to triage and prioritise the work. It also means that the open
+issues all represent agreed-upon tasks that are either being worked on, or are
+ready to be worked on.
 
-All features should be documented. If you don't see a feature in the docs, assume it doesn't exist.
+This should also make it easier to see what's in progress, and to find
+something to work on if you'd like to do so.
 
-## Bugs
+## What this means in practice
 
-Think you've discovered a bug?
+### If you'd like to contribute to the code...
 
-1. Search existing issues to see if it's been reported.
-2. Try the `main` branch to make sure it hasn't been fixed.
+1. If you're interested in working on one of the open issues, please do! We are
+   grateful for the help!
+2. You'll want to make sure someone else isn't already working on the same
+   issue. If they are, it will be tagged "in progress" and/or it should be clear
+   from the comments. When in doubt, you can always comment on the issue to ask.
+3. Similarly, if you need any help or guidance on the issue, please comment on
+   the issue as you go, and we'll do our best to help.
+4. When you have something ready for review or collaboration, open a PR.
 
-```rb
-gem "mailresolver", github: "mailpiece/mailresolver"
-```
+### If you've found a bug...
 
-If the above steps don't help, create an issue. Include:
+1. If you don't have steps to reproduce the problem, or you're not certain it's a
+   bug, open a discussion.
+2. If you have steps to reproduce, open an issue.
 
-- Detailed steps to reproduce
-- Complete backtraces for exceptions
+### If you have an idea for a feature...
 
-## Security
+1. Open a discussion.
 
-Please don't open a public issue for security reports. See [SECURITY.md](SECURITY.md).
+### If you have a question, or are having trouble with configuration...
 
-## New Features
+1. Open a discussion.
 
-If you'd like to discuss a new feature, create an issue and start the title with `[Idea]`.
+### If you've found a security problem...
 
-## Pull Requests
+Please don't open a public issue or discussion. See [SECURITY.md](SECURITY.md).
 
-Fork the project and create a pull request. A few tips:
-
-- Keep changes to a minimum. If you have multiple features or fixes, submit multiple pull requests.
-- Follow the existing style. The code should read like it's written by a single person.
-
-Feel free to open an issue to get feedback on your idea before spending too much time on it.
-
----
-
-This contributing guide is released under [CC0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain). Use it for your own project without attribution.
+Hopefully this process makes it easier for everyone to be involved. Thanks for
+helping! ❤️
