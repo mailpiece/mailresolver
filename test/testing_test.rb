@@ -8,12 +8,17 @@ class MailResolver::TestingTest < MailResolver::TestCase
     "ipv4.example.com" => { a: [ "192.0.2.2" ] },
     "quiet.example.com" => { txt: [] },
     "broken.example.com" => { txt: :servfail, a: :timeout, mx: :nxdomain },
-    "192.0.2.1" => { ptr: [ "mail.example.com" ] }
+    "192.0.2.1" => { ptr: [ "mail.example.com" ] },
+    "_acme-challenge.example.com" => { ns: [ "mx.example.com" ] }
   }.freeze
 
   def test_a_name_the_zone_publishes_answers_with_its_records
     assert_equal [ "v=spf1 -all" ], resolver.txt("example.com")
     assert_equal [ "mail.example.com" ], resolver.ptr("192.0.2.1")
+  end
+
+  def test_ns_answers_with_the_zone_nameservers
+    assert_equal [ "mx.example.com" ], resolver.ns("_acme-challenge.example.com")
   end
 
   def test_names_are_matched_without_regard_to_case_or_a_trailing_root

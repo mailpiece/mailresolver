@@ -120,6 +120,12 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_equal [ "sel.esp.example.com" ], resolver.cname("sel._domainkey.example.com")
   end
 
+  def test_ns_answers_with_the_nameservers
+    resolver = answering([ record(:NS, domainname: "ns1.example.net"), record(:NS, domainname: "ns2.example.net") ])
+
+    assert_equal [ "ns1.example.net", "ns2.example.net" ], resolver.ns("example.com")
+  end
+
   # Dnsruby returns the whole answer section; a CNAME beside a TXT has no `strings`.
   def test_an_alias_beside_the_answer_is_not_mistaken_for_it
     records = [
