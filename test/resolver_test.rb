@@ -280,6 +280,11 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     refute MailResolver::Resolver.new.send(:resolver).do_caching
   end
 
+  # Dnsruby advertises its udp_size in each query's OPT record.
+  def test_the_real_resolver_advertises_a_1232_byte_edns_buffer
+    assert_equal 1232, MailResolver::Resolver.new.send(:resolver).udp_size
+  end
+
   # Dnsruby fires attempt n at 2^(n-1) times retry_delay; 2.5 lands [5, 3, 3] at 0s/5s/10s.
   def test_the_real_resolver_retries_on_the_documented_schedule
     resolver = MailResolver::Resolver.new.send(:resolver)

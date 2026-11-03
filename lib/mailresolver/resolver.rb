@@ -122,6 +122,8 @@ module MailResolver
           @resolver ||= Dnsruby::Resolver.new(**options).tap do |dns|
             dns.dnssec = false
             dns.do_caching = false
+            # DNS Flag Day 2020: a reply that would fragment comes back truncated and retries over TCP.
+            dns.udp_size = 1232
             dns.query_timeout = @timeouts.sum
             dns.packet_timeout = @timeouts.first
             dns.retry_times = @timeouts.size
