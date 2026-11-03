@@ -1,32 +1,41 @@
 require_relative "test_helper"
 
 class MailResolver::ResolverTest < MailResolver::TestCase
-  Reply = Struct.new(:answer)
+  Reply = Struct.new(:answer, :rcode, :header)
+  Header = Struct.new(:tc)
 
   # Stands in for dnsruby so we test our mapping, not its ability to raise.
   class StubDns
     attr_reader :queries
 
-    def initialize(answer)
+    def initialize(answer, rcode: Dnsruby::RCode::NOERROR, truncated: false)
       @answer = answer
+      @rcode, @truncated = rcode, truncated
       @queries = []
     end
 
-    def query(name, type)
-      @queries << [ name, type ]
+    def send_async(message, replies, id)
+      question = message.question.first
+      @queries << [ question.qname.to_s, question.qtype.to_s ]
 
       if @answer.is_a?(Exception)
-        raise @answer
+        replies.push([ id, nil, @answer ])
       else
-        Reply.new(@answer)
+        replies.push([ id, Reply.new(@answer, Dnsruby::RCode.new(@rcode), Header.new(@truncated)), nil ])
       end
     end
   end
 
+  # Dnsruby whose I/O thread never answers, as after a fork or behind a stalled TCP connect.
+  class SilentDns < Dnsruby::Resolver
+    def send_async(*)
+    end
+  end
+
   class StubbedResolver < MailResolver::Resolver
-    def initialize(answer)
+    def initialize(answer, **reply)
       super()
-      @answer = answer
+      @answer, @reply = answer, reply
     end
 
     def queries
@@ -35,7 +44,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
 
     private
       def resolver
-        @stub ||= StubDns.new(@answer)
+        @stub ||= StubDns.new(@answer, **@reply)
       end
   end
 
@@ -115,7 +124,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   end
 
   def test_cname_answers_with_the_alias_target
-    resolver = answering([ record(:CNAME, domainname: "sel.esp.example.com") ])
+    resolver = answering([ record(:CNAME, name: "sel._domainkey.example.com", domainname: "sel.esp.example.com") ])
 
     assert_equal [ "sel.esp.example.com" ], resolver.cname("sel._domainkey.example.com")
   end
@@ -129,11 +138,67 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   # Dnsruby returns the whole answer section; a CNAME beside a TXT has no `strings`.
   def test_an_alias_beside_the_answer_is_not_mistaken_for_it
     records = [
-      record(:CNAME, domainname: "sel.esp.example.com"),
-      record(:TXT, strings: [ "v=DKIM1; k=rsa; p=MIGf" ])
+      record(:CNAME, name: "sel._domainkey.example.com", domainname: "sel.esp.example.com"),
+      record(:TXT, name: "sel.esp.example.com", strings: [ "v=DKIM1; k=rsa; p=MIGf" ])
     ]
 
     assert_equal [ "v=DKIM1; k=rsa; p=MIGf" ], answering(records).txt("sel._domainkey.example.com")
+  end
+
+  def test_records_another_name_owns_are_not_the_answer
+    records = [ record(:TXT, name: "_dmarc.victim.example", strings: [ "v=DMARC1; p=none" ]) ]
+
+    assert_raises(MailResolver::NotFound) { answering(records).txt("example.com") }
+    assert_raises(MailResolver::NotFound) { answering([ record(:A, name: "other.example", address: "192.0.2.1") ]).a("example.com") }
+  end
+
+  def test_owners_match_without_regard_to_case
+    resolver = answering([ record(:A, name: "Example.COM", address: "192.0.2.1") ])
+
+    assert_equal [ "192.0.2.1" ], resolver.a("example.com")
+  end
+
+  def test_an_alias_chain_is_followed_to_the_records_it_leads_to
+    records = [
+      record(:A, name: "stray.example", address: "192.0.2.9"),
+      record(:CNAME, name: "b.example", domainname: "c.example"),
+      record(:A, name: "c.example", address: "192.0.2.1"),
+      record(:CNAME, name: "example.com", domainname: "b.example")
+    ]
+
+    assert_equal [ "192.0.2.1" ], answering(records).a("example.com")
+  end
+
+  def test_an_address_is_answered_for_the_reverse_name_dnsruby_asks
+    resolver = answering([ record(:TXT, name: "1.2.0.192.in-addr.arpa", strings: [ "v=spf1 -all" ]) ])
+
+    assert_equal [ "v=spf1 -all" ], resolver.txt("192.0.2.1")
+  end
+
+  def test_an_alias_loop_is_not_found
+    records = [ record(:CNAME, domainname: "b.example"), record(:CNAME, name: "b.example", domainname: "example.com") ]
+
+    assert_raises(MailResolver::NotFound) { answering(records).txt("example.com") }
+  end
+
+  def test_an_alias_chain_ends_after_sixteen_hops
+    chain = ->(hops) do
+      names = [ "example.com", *(1..hops).map { |hop| "h#{hop}.example" } ]
+      names.each_cons(2).map { |from, to| record(:CNAME, name: from, domainname: to) } +
+        [ record(:A, name: names.last, address: "192.0.2.1") ]
+    end
+
+    assert_equal [ "192.0.2.1" ], answering(chain.(16)).a("example.com")
+    assert_raises(MailResolver::NotFound) { answering(chain.(17)).a("example.com") }
+  end
+
+  def test_cname_answers_with_the_first_alias_only
+    records = [
+      record(:CNAME, domainname: "b.example"),
+      record(:CNAME, name: "b.example", domainname: "c.example")
+    ]
+
+    assert_equal [ "b.example" ], answering(records).cname("example.com")
   end
 
   def test_addresses_merges_a_and_aaaa
@@ -177,7 +242,16 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       answering([]).txt("example.com")
     end
 
-    assert_includes error.message, "no TXT records for example.com"
+    assert_includes error.message, "no TXT records for \"example.com\""
+  end
+
+  def test_a_name_reaches_an_error_message_quoted_with_its_control_characters_escaped
+    error = assert_raises MailResolver::NotFound do
+      answering([]).txt("example.com\r\nX-Injected: 1\0")
+    end
+
+    assert_includes error.message, "\"example.com\\r\\nX-Injected: 1\\u0000\""
+    refute_match(/[\r\n\0]/, error.message)
   end
 
   def test_a_servfail_is_a_server_failure
@@ -190,6 +264,49 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_raises MailResolver::ServerFailure do
       answering(Dnsruby::Refused.new("example.com")).txt("example.com")
     end
+  end
+
+  # Dnsruby raises only for the rcodes it knows, and hands the rest back as answers.
+  def test_an_rcode_dnsruby_does_not_know_is_a_server_failure
+    error = assert_raises MailResolver::ServerFailure do
+      answering([ record(:TXT, strings: [ "v=spf1 +all" ]) ], rcode: 11).txt("example.com")
+    end
+
+    assert_includes error.message, "rcode 11"
+  end
+
+  # Go's resolver answers these with errNoSuchHost, without asking.
+  def test_a_name_dns_cannot_carry_does_not_exist_and_is_never_asked_for
+    [ "", ".", "a..example.com", "#{"a" * 64}.example.com", "#{"a" * 63}.#{"b" * 63}.#{"c" * 63}.#{"d" * 62}",
+      "a\\.b.example.com", "a\\046b.example.com" ].each do |name|
+      resolver = answering([ record(:TXT, strings: [ "v=spf1 -all" ]) ])
+
+      assert_raises(MailResolver::NoSuchName, name) { resolver.txt(name) }
+      assert_empty resolver.queries, name
+    end
+  end
+
+  def test_a_name_at_the_length_limit_is_asked_for_with_or_without_its_trailing_dot
+    name = "#{"a" * 63}.#{"b" * 63}.#{"c" * 63}.#{"d" * 61}"
+
+    [ name, "#{name}." ].each do |asked|
+      assert_equal [ "v=spf1 -all" ], answering([ record(:TXT, name: name, strings: [ "v=spf1 -all" ]) ]).txt(asked)
+    end
+  end
+
+  def test_no_name_is_an_argument_error
+    assert_raises ArgumentError do
+      answering([]).txt(nil)
+    end
+  end
+
+  # Dnsruby retries a truncated reply over TCP, but accepts one truncated there too.
+  def test_a_truncated_reply_is_a_server_failure
+    error = assert_raises MailResolver::ServerFailure do
+      answering([ record(:TXT, strings: [ "v=spf1 -all" ]) ], truncated: true).txt("example.com")
+    end
+
+    assert_includes error.message, "truncated"
   end
 
   # Unrecognised errors must not fall through to NotFound.
@@ -253,7 +370,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       answering(Errno::ENETUNREACH.new).txt("example.com")
     end
 
-    assert_equal "couldn't resolve TXT example.com: Network is unreachable", error.message
+    assert_equal "couldn't resolve TXT \"example.com\": Network is unreachable", error.message
   end
 
   def test_no_usable_nameserver_is_a_server_failure_not_a_raw_argument_error
@@ -340,6 +457,45 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_includes error.message, "no usable nameserver"
   end
 
+  def test_a_query_dnsruby_never_answers_times_out_at_the_deadline
+    resolver = MailResolver::Resolver.new(timeouts: [ 0.2 ])
+    resolver.instance_variable_set(:@resolver, SilentDns.new(nameserver: "127.0.0.1"))
+
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_raises(MailResolver::Timeout) { resolver.txt("example.com") }
+    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1
+  end
+
+  def test_timeouts_that_are_not_positive_numbers_are_an_argument_error
+    [ [], [ 0, 1 ], [ -1 ], [ "5" ], [ Float::INFINITY ], [ Float::NAN ], 5, nil ].each do |timeouts|
+      assert_raises(ArgumentError, timeouts.inspect) { MailResolver::Resolver.new(timeouts: timeouts) }
+    end
+  end
+
+  # Dnsruby would be left with no nameserver, and every query would time out.
+  def test_no_nameservers_is_an_argument_error
+    assert_raises ArgumentError do
+      MailResolver::Resolver.new(nameservers: [])
+    end
+  end
+
+  def test_nameservers_may_be_given_as_ip_addresses
+    resolver = MailResolver::Resolver.new(nameservers: [ IPAddr.new("192.0.2.53"), IPAddr.new("2001:db8::53") ])
+
+    assert_equal [ "192.0.2.53", "2001:db8::53" ], resolver.send(:resolver).config.nameserver
+  end
+
+  # IPAddr would mask 192.0.2.0/0 down to 0.0.0.0.
+  def test_a_nameserver_given_as_a_range_is_a_server_failure
+    [ "192.0.2.53/0", "192.0.2.0/24", IPAddr.new("2001:db8::/32") ].each do |range|
+      error = assert_raises MailResolver::ServerFailure, range.inspect do
+        MailResolver::Resolver.new(nameservers: [ range ]).txt("example.com")
+      end
+
+      assert_includes error.message, "is a range"
+    end
+  end
+
   # dnsruby multiplexes concurrent queries over one I/O thread only when the object is shared.
   def test_the_real_resolver_is_built_once
     resolver = MailResolver::Resolver.new
@@ -348,8 +504,8 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   end
 
   private
-    def answering(answer)
-      StubbedResolver.new(answer)
+    def answering(answer, **reply)
+      StubbedResolver.new(answer, **reply)
     end
 
     def silencing_warnings
@@ -360,7 +516,15 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       $VERBOSE = original_verbose
     end
 
-    def record(type, **attributes)
-      Struct.new(:type, *attributes.keys, keyword_init: true).new(type: type.to_s, **attributes)
+    # Owned by example.com unless named; names are absolute, as they arrive off the wire.
+    def record(type, name: "example.com", **attributes)
+      attributes[:domainname] &&= absolute(attributes[:domainname])
+
+      Struct.new(:type, :name, *attributes.keys, keyword_init: true)
+        .new(type: type.to_s, name: absolute(name), **attributes)
+    end
+
+    def absolute(name)
+      Dnsruby::Name.create("#{name}.")
     end
 end

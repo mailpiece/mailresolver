@@ -60,7 +60,7 @@ resolver.cname("www.example.com")     # => ["example.com"]
 resolver.ns("example.com")            # => ["ns1.example.net", "ns2.example.net"]
 ```
 
-`MailResolver::Resolver.new(nameservers: ["192.0.2.53", "2001:db8::53"])` asks those addresses instead of the system resolver; one that isn't an address raises `ServerFailure`.
+`MailResolver::Resolver.new(nameservers: ["192.0.2.53", "2001:db8::53"])` asks those addresses, strings or `IPAddr`s, instead of the system resolver; one that isn't a single address raises `ServerFailure`, and an empty list `ArgumentError`.
 
 `addresses` merges A and AAAA. A family the name doesn't publish contributes nothing to it rather than ending the lookup — but a name that doesn't exist at all raises `NoSuchName`, and a nameserver that couldn't answer still raises, same as every other method here.
 
@@ -74,7 +74,7 @@ Every method raises one of three errors instead of guessing:
 - `MailResolver::ServerFailure` — the server didn't say: SERVFAIL, REFUSED, or a transport failure (a connect that failed, a socket dnsruby couldn't open, an address that wouldn't resolve)
 - `MailResolver::Timeout` — no answer arrived in time
 
-All of them descend from `MailResolver::Error`. Malformed input is the caller's bug, not a DNS answer, and raises `ArgumentError` instead — `ptr("not an ip")`, for instance.
+All of them descend from `MailResolver::Error`. A name DNS can't carry — empty, an empty label, a label over 63 bytes, over 253 in all, or any backslash — raises `NoSuchName` without a query, since no such name can exist. Other malformed input is the caller's bug, not a DNS answer, and raises `ArgumentError` instead — `ptr("not an ip")`, or a `nil` name.
 
 ## Why This Distinction Exists
 
@@ -95,7 +95,9 @@ MailAuth.authenticate(raw, ip: ip, resolver: resolver)
 MtaSts.lookup(domain, known: nil, resolver: resolver)
 ```
 
-dnsruby multiplexes concurrent queries over a single I/O thread, and can only do that if callers share one `Dnsruby::Resolver`. Handing each library its own `MailResolver::Resolver` — rather than one instance shared across them — buys nothing and costs an I/O thread apiece.
+A resolver is safe to share across threads. dnsruby sends every query in the process over one I/O thread, whichever resolver it came from, so a resolver apiece costs no thread, only building dnsruby's resolver again — reading the system configuration — on each one's first query. Share one by default; build one per lookup when each lookup has a deadline of its own, with `timeouts` scaled to the time left.
+
+That one I/O thread is also why TCP matters: see [Configuration](#configuration).
 
 ## Configuration
 
@@ -103,7 +105,9 @@ dnsruby multiplexes concurrent queries over a single I/O thread, and can only do
 MailResolver::Resolver.new(timeouts: [5, 3, 3])
 ```
 
-`timeouts` is one attempt per element: the first element is how long the first packet gets before the first retry, dnsruby doubles the interval for each retry after that, and the sum is the hard deadline. The default sends packets at 0, 5, and 10 seconds and gives the whole query 11 seconds before raising `Timeout`.
+`timeouts` is one attempt per element: the first element is how long the first packet gets before the first retry, dnsruby doubles the interval for each retry after that, and the sum is the deadline. The default sends packets at 0, 5, and 10 seconds and gives the whole query 11 seconds before raising `Timeout`. dnsruby checks deadlines twice a second, so a lookup can run up to half a second over, but no more, even when dnsruby's I/O thread is stuck.
+
+The nameserver must be reachable on TCP port 53 as well as UDP. An answer over 1232 bytes comes back truncated and dnsruby asks again over TCP, connecting from its one I/O thread: if TCP/53 is filtered, that connect blocks every lookup in the process for up to the first timeout. Each still raises `Timeout` at its own deadline.
 
 DNSSEC validation and dnsruby's answer cache are both off, unconditionally. DNSSEC costs a round trip that most callers of this gem have no way to act on — MTA-STS, for one, trusts the certificate on the policy host rather than the DNS answer. Caching is dnsruby's own concern to have off: its cache is process-global, so a nameserver that starts failing would otherwise keep serving its last good answer to every caller in the process.
 

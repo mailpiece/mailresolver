@@ -18,8 +18,22 @@ module MailResolver
     # Default: attempts at 0s, 5s, and 10s, over at 11s.
     TIMEOUTS = [ 5, 3, 3 ].freeze
 
+    # Dnsruby checks its own deadline twice a second; ours only backs it up.
+    DEADLINE_MARGIN = 0.5
+
+    # Aliases followed from the name asked before giving up, as a loop never ends.
+    ALIAS_HOPS = 16
+
     # Nameservers are IP addresses, one or several; nil asks the system resolver.
     def initialize(timeouts: TIMEOUTS, nameservers: nil)
+      unless timeouts.is_a?(Array) && timeouts.any? && timeouts.all? { |timeout| seconds?(timeout) }
+        raise ArgumentError, "timeouts must be one or more positive numbers of seconds, not #{timeouts.inspect}"
+      end
+
+      if nameservers && Array(nameservers).empty?
+        raise ArgumentError, "nameservers must name one or more addresses, or be nil for the system resolver"
+      end
+
       @timeouts = timeouts
       @nameservers = nameservers
       @lock = Mutex.new
@@ -72,23 +86,77 @@ module MailResolver
         []
       end
 
-      # Filtered by type: a CNAME answer carries the alias beside the records it leads to.
+      # Names are quoted in messages, so a CR, LF or NUL in one never reaches a log line as is.
       def records(type, name)
-        answers = resolver.query(name.to_s, type).answer.select { |record| record.type == type }
+        raise ArgumentError, "no name to resolve" if name.nil?
+        name = name.to_s
+        raise NoSuchName, "no such name #{name.inspect}" unless resolvable?(name)
+
+        # Dnsruby asks for an address's reverse name, whatever the type.
+        answers = owned(ask(name, type).answer, type, Dnsruby::Question.new(name, type).qname)
 
         if answers.any?
           answers
         else
-          raise NotFound, "no #{type} records for #{name}"
+          raise NotFound, "no #{type} records for #{name.inspect}"
         end
       rescue Dnsruby::NXDomain
-        raise NoSuchName, "no such name #{name}"
+        raise NoSuchName, "no such name #{name.inspect}"
       rescue Dnsruby::ResolvTimeout
         # Descends from Timeout::Error, not Dnsruby::ResolvError.
-        raise Timeout, "timed out resolving #{type} #{name}"
+        raise Timeout, "timed out resolving #{type} #{name.inspect}"
       # Connect/send failures arrive as bare IOError/SocketError/SystemCallError from dnsruby's queue.
       rescue Dnsruby::ResolvError, IOError, SocketError, SystemCallError => error
-        raise ServerFailure, "couldn't resolve #{type} #{name}: #{reason(error)}"
+        raise ServerFailure, "couldn't resolve #{type} #{name.inspect}: #{reason(error)}"
+      end
+
+      # Only records of the type asked for, owned by the name or an alias it leads to: a server
+      # can put anything in an answer. A CNAME lookup answers with the first alias alone.
+      def owned(answer, type, owner)
+        (ALIAS_HOPS + 1).times do
+          records = answer.select { |record| record.type == type && record.name == owner }
+          return records if records.any? || type == "CNAME"
+
+          owner = answer.find { |record| record.type == "CNAME" && record.name == owner }&.domainname
+          break unless owner
+        end
+
+        []
+      end
+
+      # As Go's resolver does: a name DNS can't carry can't exist, and isn't sent malformed.
+      # Dnsruby reads a backslash as an escape, which would ask for a different name.
+      def resolvable?(name)
+        name = name.delete_suffix(".")
+
+        name.bytesize.between?(1, 253) && !name.include?("\\") &&
+          name.split(".", -1).all? { |label| label.bytesize.between?(1, 63) }
+      end
+
+      # Dnsruby#query without its unbounded wait: a stuck I/O thread or a fork would block forever.
+      # Sent under the lock, as dnsruby builds its per-resolver state on first send without one.
+      def ask(name, type)
+        message = Dnsruby::Message.new(name, type)
+        message.header.rd = 1
+        message.do_caching = false
+        message.do_validation = false
+
+        replies = Queue.new
+        # Dnsruby's default query id is the time plus a small random number, which can collide.
+        @lock.synchronize { resolver.send_async(message, replies, Object.new) }
+
+        _id, reply, error = replies.pop(timeout: @timeouts.sum + DEADLINE_MARGIN) ||
+          raise(Timeout, "timed out resolving #{type} #{name.inspect}")
+        raise error if error
+
+        # Dnsruby hands back an rcode it has no error for, and a reply truncated over TCP too.
+        if reply.rcode != Dnsruby::RCode::NOERROR
+          raise ServerFailure, "couldn't resolve #{type} #{name.inspect}: rcode #{reply.rcode.code}"
+        elsif reply.header.tc
+          raise ServerFailure, "couldn't resolve #{type} #{name.inspect}: truncated reply"
+        else
+          reply
+        end
       end
 
       def reason(error)
@@ -115,21 +183,19 @@ module MailResolver
         message.sub(/\s*\[".*\z/m, "")
       end
 
-      # Built once and shared so concurrent queries multiplex over one I/O thread.
+      # Built once, on first use under the lock, and shared so concurrent queries multiplex.
       # Caching and DNSSEC are off — the former is process-global, the latter unused by callers.
       def resolver
-        @lock.synchronize do
-          @resolver ||= Dnsruby::Resolver.new(**options).tap do |dns|
-            dns.dnssec = false
-            dns.do_caching = false
-            # DNS Flag Day 2020: a reply that would fragment comes back truncated and retries over TCP.
-            dns.udp_size = 1232
-            dns.query_timeout = @timeouts.sum
-            dns.packet_timeout = @timeouts.first
-            dns.retry_times = @timeouts.size
-            # Dnsruby fires attempt n at 2^(n-1) times this; halving the first element lands the schedule.
-            dns.retry_delay = @timeouts.first / 2.0
-          end
+        @resolver ||= Dnsruby::Resolver.new(**options).tap do |dns|
+          dns.dnssec = false
+          dns.do_caching = false
+          # DNS Flag Day 2020: a reply that would fragment comes back truncated and retries over TCP.
+          dns.udp_size = 1232
+          dns.query_timeout = @timeouts.sum
+          dns.packet_timeout = @timeouts.first
+          dns.retry_times = @timeouts.size
+          # Dnsruby fires attempt n at 2^(n-1) times this; halving the first element lands the schedule.
+          dns.retry_delay = @timeouts.first / 2.0
         end
       rescue ArgumentError => error
         # Dnsruby raises this when no configured nameserver is usable, IPAddr when one isn't an address.
@@ -140,10 +206,25 @@ module MailResolver
       # Addresses are checked here: dnsruby looks up a name it can't parse, and drops one it can't find.
       def options
         if @nameservers
-          { nameserver: Array(@nameservers).map { |address| IPAddr.new(address).to_s } }
+          { nameserver: Array(@nameservers).map { |address| nameserver(address) } }
         else
           {}
         end
+      end
+
+      # IPAddr would mask a range down to its first address, which no one meant as a nameserver.
+      def nameserver(address)
+        address = IPAddr.new(address.to_s) unless address.is_a?(IPAddr)
+
+        if address.prefix == (address.ipv4? ? 32 : 128)
+          address.to_s
+        else
+          raise ArgumentError, "#{address}/#{address.prefix} is a range, not an address"
+        end
+      end
+
+      def seconds?(timeout)
+        timeout.is_a?(Numeric) && timeout.real? && timeout.finite? && timeout.positive?
       end
   end
 end
