@@ -54,6 +54,20 @@ class MailResolver::NameserverTest < MailResolver::TestCase
     end
   end
 
+  # The loopback nameserver wins over the option, but the option is still checked.
+  def test_a_lookup_through_a_local_nameserver_works_with_nameservers_set
+    record = Resolv::DNS::Resource::IN::TXT.new("v=spf1 -all")
+    nameserver = LocalNameserver.new(:noerror, records: [ record ])
+
+    resolver = LocalNameserver::LocalResolver.new(nameserver.port, nameservers: "192.0.2.53")
+    assert_equal [ "v=spf1 -all" ], resolver.txt("example.com")
+
+    resolver = LocalNameserver::LocalResolver.new(nameserver.port, nameservers: "not an address")
+    assert_raises(MailResolver::ServerFailure) { resolver.txt("example.com") }
+  ensure
+    nameserver&.close
+  end
+
   def test_an_alias_beside_the_answer_survives_the_wire_without_being_mistaken_for_it
     records = [
       Resolv::DNS::Resource::IN::CNAME.new(Resolv::DNS::Name.create("sel.esp.example.com.")),
