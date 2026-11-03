@@ -26,6 +26,14 @@ module MailResolver
 
     # Nameservers are IP addresses, one or several; nil asks the system resolver.
     def initialize(timeouts: TIMEOUTS, nameservers: nil)
+      unless timeouts.is_a?(Array) && timeouts.any? && timeouts.all? { |timeout| seconds?(timeout) }
+        raise ArgumentError, "timeouts must be one or more positive numbers of seconds, not #{timeouts.inspect}"
+      end
+
+      if nameservers && Array(nameservers).empty?
+        raise ArgumentError, "nameservers must name one or more addresses, or be nil for the system resolver"
+      end
+
       @timeouts = timeouts
       @nameservers = nameservers
       @lock = Mutex.new
@@ -198,10 +206,25 @@ module MailResolver
       # Addresses are checked here: dnsruby looks up a name it can't parse, and drops one it can't find.
       def options
         if @nameservers
-          { nameserver: Array(@nameservers).map { |address| IPAddr.new(address).to_s } }
+          { nameserver: Array(@nameservers).map { |address| nameserver(address) } }
         else
           {}
         end
+      end
+
+      # IPAddr would mask a range down to its first address, which no one meant as a nameserver.
+      def nameserver(address)
+        address = IPAddr.new(address.to_s) unless address.is_a?(IPAddr)
+
+        if address.prefix == (address.ipv4? ? 32 : 128)
+          address.to_s
+        else
+          raise ArgumentError, "#{address}/#{address.prefix} is a range, not an address"
+        end
+      end
+
+      def seconds?(timeout)
+        timeout.is_a?(Numeric) && timeout.real? && timeout.finite? && timeout.positive?
       end
   end
 end

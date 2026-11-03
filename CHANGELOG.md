@@ -10,6 +10,8 @@
 - Raise `NoSuchName` for a name DNS can't carry, without asking, and `ArgumentError` for `nil`.
 - Answer only with records owned by the name asked or an alias it leads to; `cname` answers with the first alias.
 - Quote the name in error messages, so a CR, LF or NUL in it is escaped.
+- Raise `ArgumentError` on construction for timeouts that aren't positive numbers, or no nameservers.
+- Accept `IPAddr` nameservers, and refuse a range rather than masking it to its first address.
 
 ## 0.6.0
 

@@ -60,7 +60,7 @@ resolver.cname("www.example.com")     # => ["example.com"]
 resolver.ns("example.com")            # => ["ns1.example.net", "ns2.example.net"]
 ```
 
-`MailResolver::Resolver.new(nameservers: ["192.0.2.53", "2001:db8::53"])` asks those addresses instead of the system resolver; one that isn't an address raises `ServerFailure`.
+`MailResolver::Resolver.new(nameservers: ["192.0.2.53", "2001:db8::53"])` asks those addresses, strings or `IPAddr`s, instead of the system resolver; one that isn't a single address raises `ServerFailure`, and an empty list `ArgumentError`.
 
 `addresses` merges A and AAAA. A family the name doesn't publish contributes nothing to it rather than ending the lookup — but a name that doesn't exist at all raises `NoSuchName`, and a nameserver that couldn't answer still raises, same as every other method here.
 

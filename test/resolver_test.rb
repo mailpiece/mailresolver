@@ -466,6 +466,36 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1
   end
 
+  def test_timeouts_that_are_not_positive_numbers_are_an_argument_error
+    [ [], [ 0, 1 ], [ -1 ], [ "5" ], [ Float::INFINITY ], [ Float::NAN ], 5, nil ].each do |timeouts|
+      assert_raises(ArgumentError, timeouts.inspect) { MailResolver::Resolver.new(timeouts: timeouts) }
+    end
+  end
+
+  # Dnsruby would be left with no nameserver, and every query would time out.
+  def test_no_nameservers_is_an_argument_error
+    assert_raises ArgumentError do
+      MailResolver::Resolver.new(nameservers: [])
+    end
+  end
+
+  def test_nameservers_may_be_given_as_ip_addresses
+    resolver = MailResolver::Resolver.new(nameservers: [ IPAddr.new("192.0.2.53"), IPAddr.new("2001:db8::53") ])
+
+    assert_equal [ "192.0.2.53", "2001:db8::53" ], resolver.send(:resolver).config.nameserver
+  end
+
+  # IPAddr would mask 192.0.2.0/0 down to 0.0.0.0.
+  def test_a_nameserver_given_as_a_range_is_a_server_failure
+    [ "192.0.2.53/0", "192.0.2.0/24", IPAddr.new("2001:db8::/32") ].each do |range|
+      error = assert_raises MailResolver::ServerFailure, range.inspect do
+        MailResolver::Resolver.new(nameservers: [ range ]).txt("example.com")
+      end
+
+      assert_includes error.message, "is a range"
+    end
+  end
+
   # dnsruby multiplexes concurrent queries over one I/O thread only when the object is shared.
   def test_the_real_resolver_is_built_once
     resolver = MailResolver::Resolver.new
