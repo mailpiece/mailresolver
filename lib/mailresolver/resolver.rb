@@ -21,6 +21,9 @@ module MailResolver
     # Dnsruby checks its own deadline twice a second; ours only backs it up.
     DEADLINE_MARGIN = 0.5
 
+    # Aliases followed from the name asked before giving up, as a loop never ends.
+    ALIAS_HOPS = 16
+
     # Nameservers are IP addresses, one or several; nil asks the system resolver.
     def initialize(timeouts: TIMEOUTS, nameservers: nil)
       @timeouts = timeouts
@@ -75,12 +78,12 @@ module MailResolver
         []
       end
 
-      # Filtered by type: a CNAME answer carries the alias beside the records it leads to.
       def records(type, name)
         raise ArgumentError, "no name to resolve" if name.nil?
         raise NoSuchName, "no such name #{name}" unless resolvable?(name.to_s)
 
-        answers = ask(name.to_s, type).answer.select { |record| record.type == type }
+        # Dnsruby asks for an address's reverse name, whatever the type.
+        answers = owned(ask(name.to_s, type).answer, type, Dnsruby::Question.new(name.to_s, type).qname)
 
         if answers.any?
           answers
@@ -95,6 +98,20 @@ module MailResolver
       # Connect/send failures arrive as bare IOError/SocketError/SystemCallError from dnsruby's queue.
       rescue Dnsruby::ResolvError, IOError, SocketError, SystemCallError => error
         raise ServerFailure, "couldn't resolve #{type} #{name}: #{reason(error)}"
+      end
+
+      # Only records of the type asked for, owned by the name or an alias it leads to: a server
+      # can put anything in an answer. A CNAME lookup answers with the first alias alone.
+      def owned(answer, type, owner)
+        (ALIAS_HOPS + 1).times do
+          records = answer.select { |record| record.type == type && record.name == owner }
+          return records if records.any? || type == "CNAME"
+
+          owner = answer.find { |record| record.type == "CNAME" && record.name == owner }&.domainname
+          break unless owner
+        end
+
+        []
       end
 
       # As Go's resolver does: a name DNS can't carry can't exist, and isn't sent malformed.

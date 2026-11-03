@@ -124,7 +124,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   end
 
   def test_cname_answers_with_the_alias_target
-    resolver = answering([ record(:CNAME, domainname: "sel.esp.example.com") ])
+    resolver = answering([ record(:CNAME, name: "sel._domainkey.example.com", domainname: "sel.esp.example.com") ])
 
     assert_equal [ "sel.esp.example.com" ], resolver.cname("sel._domainkey.example.com")
   end
@@ -138,11 +138,67 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   # Dnsruby returns the whole answer section; a CNAME beside a TXT has no `strings`.
   def test_an_alias_beside_the_answer_is_not_mistaken_for_it
     records = [
-      record(:CNAME, domainname: "sel.esp.example.com"),
-      record(:TXT, strings: [ "v=DKIM1; k=rsa; p=MIGf" ])
+      record(:CNAME, name: "sel._domainkey.example.com", domainname: "sel.esp.example.com"),
+      record(:TXT, name: "sel.esp.example.com", strings: [ "v=DKIM1; k=rsa; p=MIGf" ])
     ]
 
     assert_equal [ "v=DKIM1; k=rsa; p=MIGf" ], answering(records).txt("sel._domainkey.example.com")
+  end
+
+  def test_records_another_name_owns_are_not_the_answer
+    records = [ record(:TXT, name: "_dmarc.victim.example", strings: [ "v=DMARC1; p=none" ]) ]
+
+    assert_raises(MailResolver::NotFound) { answering(records).txt("example.com") }
+    assert_raises(MailResolver::NotFound) { answering([ record(:A, name: "other.example", address: "192.0.2.1") ]).a("example.com") }
+  end
+
+  def test_owners_match_without_regard_to_case
+    resolver = answering([ record(:A, name: "Example.COM", address: "192.0.2.1") ])
+
+    assert_equal [ "192.0.2.1" ], resolver.a("example.com")
+  end
+
+  def test_an_alias_chain_is_followed_to_the_records_it_leads_to
+    records = [
+      record(:A, name: "stray.example", address: "192.0.2.9"),
+      record(:CNAME, name: "b.example", domainname: "c.example"),
+      record(:A, name: "c.example", address: "192.0.2.1"),
+      record(:CNAME, name: "example.com", domainname: "b.example")
+    ]
+
+    assert_equal [ "192.0.2.1" ], answering(records).a("example.com")
+  end
+
+  def test_an_address_is_answered_for_the_reverse_name_dnsruby_asks
+    resolver = answering([ record(:TXT, name: "1.2.0.192.in-addr.arpa", strings: [ "v=spf1 -all" ]) ])
+
+    assert_equal [ "v=spf1 -all" ], resolver.txt("192.0.2.1")
+  end
+
+  def test_an_alias_loop_is_not_found
+    records = [ record(:CNAME, domainname: "b.example"), record(:CNAME, name: "b.example", domainname: "example.com") ]
+
+    assert_raises(MailResolver::NotFound) { answering(records).txt("example.com") }
+  end
+
+  def test_an_alias_chain_ends_after_sixteen_hops
+    chain = ->(hops) do
+      names = [ "example.com", *(1..hops).map { |hop| "h#{hop}.example" } ]
+      names.each_cons(2).map { |from, to| record(:CNAME, name: from, domainname: to) } +
+        [ record(:A, name: names.last, address: "192.0.2.1") ]
+    end
+
+    assert_equal [ "192.0.2.1" ], answering(chain.(16)).a("example.com")
+    assert_raises(MailResolver::NotFound) { answering(chain.(17)).a("example.com") }
+  end
+
+  def test_cname_answers_with_the_first_alias_only
+    records = [
+      record(:CNAME, domainname: "b.example"),
+      record(:CNAME, name: "b.example", domainname: "c.example")
+    ]
+
+    assert_equal [ "b.example" ], answering(records).cname("example.com")
   end
 
   def test_addresses_merges_a_and_aaaa
@@ -225,7 +281,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     name = "#{"a" * 63}.#{"b" * 63}.#{"c" * 63}.#{"d" * 61}"
 
     [ name, "#{name}." ].each do |asked|
-      assert_equal [ "v=spf1 -all" ], answering([ record(:TXT, strings: [ "v=spf1 -all" ]) ]).txt(asked)
+      assert_equal [ "v=spf1 -all" ], answering([ record(:TXT, name: name, strings: [ "v=spf1 -all" ]) ]).txt(asked)
     end
   end
 
@@ -421,7 +477,15 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       $VERBOSE = original_verbose
     end
 
-    def record(type, **attributes)
-      Struct.new(:type, *attributes.keys, keyword_init: true).new(type: type.to_s, **attributes)
+    # Owned by example.com unless named; names are absolute, as they arrive off the wire.
+    def record(type, name: "example.com", **attributes)
+      attributes[:domainname] &&= absolute(attributes[:domainname])
+
+      Struct.new(:type, :name, *attributes.keys, keyword_init: true)
+        .new(type: type.to_s, name: absolute(name), **attributes)
+    end
+
+    def absolute(name)
+      Dnsruby::Name.create("#{name}.")
     end
 end
