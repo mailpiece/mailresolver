@@ -95,7 +95,9 @@ MailAuth.authenticate(raw, ip: ip, resolver: resolver)
 MtaSts.lookup(domain, known: nil, resolver: resolver)
 ```
 
-dnsruby multiplexes concurrent queries over a single I/O thread, and can only do that if callers share one `Dnsruby::Resolver`. Handing each library its own `MailResolver::Resolver` — rather than one instance shared across them — buys nothing and costs an I/O thread apiece.
+A resolver is safe to share across threads. dnsruby sends every query in the process over one I/O thread, whichever resolver it came from, so a resolver apiece costs no thread, only building dnsruby's resolver again — reading the system configuration — on each one's first query. Share one by default; build one per lookup when each lookup has a deadline of its own, with `timeouts` scaled to the time left.
+
+That one I/O thread is also why TCP matters: see [Configuration](#configuration).
 
 ## Configuration
 
@@ -103,7 +105,9 @@ dnsruby multiplexes concurrent queries over a single I/O thread, and can only do
 MailResolver::Resolver.new(timeouts: [5, 3, 3])
 ```
 
-`timeouts` is one attempt per element: the first element is how long the first packet gets before the first retry, dnsruby doubles the interval for each retry after that, and the sum is the hard deadline. The default sends packets at 0, 5, and 10 seconds and gives the whole query 11 seconds before raising `Timeout`.
+`timeouts` is one attempt per element: the first element is how long the first packet gets before the first retry, dnsruby doubles the interval for each retry after that, and the sum is the deadline. The default sends packets at 0, 5, and 10 seconds and gives the whole query 11 seconds before raising `Timeout`. dnsruby checks deadlines twice a second, so a lookup can run up to half a second over, but no more, even when dnsruby's I/O thread is stuck.
+
+The nameserver must be reachable on TCP port 53 as well as UDP. An answer over 1232 bytes comes back truncated and dnsruby asks again over TCP, connecting from its one I/O thread: if TCP/53 is filtered, that connect blocks every lookup in the process for up to the first timeout. Each still raises `Timeout` at its own deadline.
 
 DNSSEC validation and dnsruby's answer cache are both off, unconditionally. DNSSEC costs a round trip that most callers of this gem have no way to act on — MTA-STS, for one, trusts the certificate on the policy host rather than the DNS answer. Caching is dnsruby's own concern to have off: its cache is process-global, so a nameserver that starts failing would otherwise keep serving its last good answer to every caller in the process.
 
