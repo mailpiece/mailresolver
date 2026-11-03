@@ -65,9 +65,9 @@ module MailResolver
           @queries << [ key, type ]
 
           case records = @zone.dig(key, type)
-          when :timeout  then raise Timeout, "timed out resolving #{type.upcase} #{key}"
-          when :servfail then raise ServerFailure, "server failure resolving #{type.upcase} #{key}"
-          when :nxdomain then raise NoSuchName, "no such name #{key}"
+          when :timeout  then raise Timeout, "timed out resolving #{type.upcase} #{key.inspect}"
+          when :servfail then raise ServerFailure, "server failure resolving #{type.upcase} #{key.inspect}"
+          when :nxdomain then raise NoSuchName, "no such name #{key.inspect}"
           when nil, []   then raise absence(key, type)
           else records
           end
@@ -76,9 +76,9 @@ module MailResolver
         # A name the zone never mentions doesn't exist; one there without this type does.
         def absence(key, type)
           if @zone.key?(key)
-            NotFound.new("no #{type.upcase} records for #{key}")
+            NotFound.new("no #{type.upcase} records for #{key.inspect}")
           else
-            NoSuchName.new("no such name #{key}")
+            NoSuchName.new("no such name #{key.inspect}")
           end
         end
 

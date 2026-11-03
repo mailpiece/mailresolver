@@ -78,26 +78,28 @@ module MailResolver
         []
       end
 
+      # Names are quoted in messages, so a CR, LF or NUL in one never reaches a log line as is.
       def records(type, name)
         raise ArgumentError, "no name to resolve" if name.nil?
-        raise NoSuchName, "no such name #{name}" unless resolvable?(name.to_s)
+        name = name.to_s
+        raise NoSuchName, "no such name #{name.inspect}" unless resolvable?(name)
 
         # Dnsruby asks for an address's reverse name, whatever the type.
-        answers = owned(ask(name.to_s, type).answer, type, Dnsruby::Question.new(name.to_s, type).qname)
+        answers = owned(ask(name, type).answer, type, Dnsruby::Question.new(name, type).qname)
 
         if answers.any?
           answers
         else
-          raise NotFound, "no #{type} records for #{name}"
+          raise NotFound, "no #{type} records for #{name.inspect}"
         end
       rescue Dnsruby::NXDomain
-        raise NoSuchName, "no such name #{name}"
+        raise NoSuchName, "no such name #{name.inspect}"
       rescue Dnsruby::ResolvTimeout
         # Descends from Timeout::Error, not Dnsruby::ResolvError.
-        raise Timeout, "timed out resolving #{type} #{name}"
+        raise Timeout, "timed out resolving #{type} #{name.inspect}"
       # Connect/send failures arrive as bare IOError/SocketError/SystemCallError from dnsruby's queue.
       rescue Dnsruby::ResolvError, IOError, SocketError, SystemCallError => error
-        raise ServerFailure, "couldn't resolve #{type} #{name}: #{reason(error)}"
+        raise ServerFailure, "couldn't resolve #{type} #{name.inspect}: #{reason(error)}"
       end
 
       # Only records of the type asked for, owned by the name or an alias it leads to: a server
@@ -136,14 +138,14 @@ module MailResolver
         @lock.synchronize { resolver.send_async(message, replies, Object.new) }
 
         _id, reply, error = replies.pop(timeout: @timeouts.sum + DEADLINE_MARGIN) ||
-          raise(Timeout, "timed out resolving #{type} #{name}")
+          raise(Timeout, "timed out resolving #{type} #{name.inspect}")
         raise error if error
 
         # Dnsruby hands back an rcode it has no error for, and a reply truncated over TCP too.
         if reply.rcode != Dnsruby::RCode::NOERROR
-          raise ServerFailure, "couldn't resolve #{type} #{name}: rcode #{reply.rcode.code}"
+          raise ServerFailure, "couldn't resolve #{type} #{name.inspect}: rcode #{reply.rcode.code}"
         elsif reply.header.tc
-          raise ServerFailure, "couldn't resolve #{type} #{name}: truncated reply"
+          raise ServerFailure, "couldn't resolve #{type} #{name.inspect}: truncated reply"
         else
           reply
         end

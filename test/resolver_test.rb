@@ -242,7 +242,16 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       answering([]).txt("example.com")
     end
 
-    assert_includes error.message, "no TXT records for example.com"
+    assert_includes error.message, "no TXT records for \"example.com\""
+  end
+
+  def test_a_name_reaches_an_error_message_quoted_with_its_control_characters_escaped
+    error = assert_raises MailResolver::NotFound do
+      answering([]).txt("example.com\r\nX-Injected: 1\0")
+    end
+
+    assert_includes error.message, "\"example.com\\r\\nX-Injected: 1\\u0000\""
+    refute_match(/[\r\n\0]/, error.message)
   end
 
   def test_a_servfail_is_a_server_failure
@@ -361,7 +370,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       answering(Errno::ENETUNREACH.new).txt("example.com")
     end
 
-    assert_equal "couldn't resolve TXT example.com: Network is unreachable", error.message
+    assert_equal "couldn't resolve TXT \"example.com\": Network is unreachable", error.message
   end
 
   def test_no_usable_nameserver_is_a_server_failure_not_a_raw_argument_error
