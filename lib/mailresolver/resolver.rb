@@ -110,7 +110,14 @@ module MailResolver
           raise(Timeout, "timed out resolving #{type} #{name}")
         raise error if error
 
-        reply
+        # Dnsruby hands back an rcode it has no error for, and a reply truncated over TCP too.
+        if reply.rcode != Dnsruby::RCode::NOERROR
+          raise ServerFailure, "couldn't resolve #{type} #{name}: rcode #{reply.rcode.code}"
+        elsif reply.header.tc
+          raise ServerFailure, "couldn't resolve #{type} #{name}: truncated reply"
+        else
+          reply
+        end
       end
 
       def reason(error)

@@ -1,14 +1,16 @@
 require_relative "test_helper"
 
 class MailResolver::ResolverTest < MailResolver::TestCase
-  Reply = Struct.new(:answer)
+  Reply = Struct.new(:answer, :rcode, :header)
+  Header = Struct.new(:tc)
 
   # Stands in for dnsruby so we test our mapping, not its ability to raise.
   class StubDns
     attr_reader :queries
 
-    def initialize(answer)
+    def initialize(answer, rcode: Dnsruby::RCode::NOERROR, truncated: false)
       @answer = answer
+      @rcode, @truncated = rcode, truncated
       @queries = []
     end
 
@@ -19,7 +21,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       if @answer.is_a?(Exception)
         replies.push([ id, nil, @answer ])
       else
-        replies.push([ id, Reply.new(@answer), nil ])
+        replies.push([ id, Reply.new(@answer, Dnsruby::RCode.new(@rcode), Header.new(@truncated)), nil ])
       end
     end
   end
@@ -31,9 +33,9 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   end
 
   class StubbedResolver < MailResolver::Resolver
-    def initialize(answer)
+    def initialize(answer, **reply)
       super()
-      @answer = answer
+      @answer, @reply = answer, reply
     end
 
     def queries
@@ -42,7 +44,7 @@ class MailResolver::ResolverTest < MailResolver::TestCase
 
     private
       def resolver
-        @stub ||= StubDns.new(@answer)
+        @stub ||= StubDns.new(@answer, **@reply)
       end
   end
 
@@ -197,6 +199,24 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_raises MailResolver::ServerFailure do
       answering(Dnsruby::Refused.new("example.com")).txt("example.com")
     end
+  end
+
+  # Dnsruby raises only for the rcodes it knows, and hands the rest back as answers.
+  def test_an_rcode_dnsruby_does_not_know_is_a_server_failure
+    error = assert_raises MailResolver::ServerFailure do
+      answering([ record(:TXT, strings: [ "v=spf1 +all" ]) ], rcode: 11).txt("example.com")
+    end
+
+    assert_includes error.message, "rcode 11"
+  end
+
+  # Dnsruby retries a truncated reply over TCP, but accepts one truncated there too.
+  def test_a_truncated_reply_is_a_server_failure
+    error = assert_raises MailResolver::ServerFailure do
+      answering([ record(:TXT, strings: [ "v=spf1 -all" ]) ], truncated: true).txt("example.com")
+    end
+
+    assert_includes error.message, "truncated"
   end
 
   # Unrecognised errors must not fall through to NotFound.
@@ -364,8 +384,8 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   end
 
   private
-    def answering(answer)
-      StubbedResolver.new(answer)
+    def answering(answer, **reply)
+      StubbedResolver.new(answer, **reply)
     end
 
     def silencing_warnings

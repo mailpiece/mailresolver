@@ -6,6 +6,7 @@
 - Advertise a 1232-byte EDNS buffer, not dnsruby's 4096.
 - Raise `Timeout` at the deadline even when dnsruby's I/O thread is stuck.
 - Don't lose replies to a burst of queries on a fresh resolver.
+- Raise `ServerFailure` on an rcode dnsruby doesn't know, or a reply still truncated.
 
 ## 0.6.0
 
