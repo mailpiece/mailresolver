@@ -210,6 +210,31 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_includes error.message, "rcode 11"
   end
 
+  # Go's resolver answers these with errNoSuchHost, without asking.
+  def test_a_name_dns_cannot_carry_does_not_exist_and_is_never_asked_for
+    [ "", ".", "a..example.com", "#{"a" * 64}.example.com", "#{"a" * 63}.#{"b" * 63}.#{"c" * 63}.#{"d" * 62}",
+      "a\\.b.example.com", "a\\046b.example.com" ].each do |name|
+      resolver = answering([ record(:TXT, strings: [ "v=spf1 -all" ]) ])
+
+      assert_raises(MailResolver::NoSuchName, name) { resolver.txt(name) }
+      assert_empty resolver.queries, name
+    end
+  end
+
+  def test_a_name_at_the_length_limit_is_asked_for_with_or_without_its_trailing_dot
+    name = "#{"a" * 63}.#{"b" * 63}.#{"c" * 63}.#{"d" * 61}"
+
+    [ name, "#{name}." ].each do |asked|
+      assert_equal [ "v=spf1 -all" ], answering([ record(:TXT, strings: [ "v=spf1 -all" ]) ]).txt(asked)
+    end
+  end
+
+  def test_no_name_is_an_argument_error
+    assert_raises ArgumentError do
+      answering([]).txt(nil)
+    end
+  end
+
   # Dnsruby retries a truncated reply over TCP, but accepts one truncated there too.
   def test_a_truncated_reply_is_a_server_failure
     error = assert_raises MailResolver::ServerFailure do

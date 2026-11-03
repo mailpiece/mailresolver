@@ -77,6 +77,9 @@ module MailResolver
 
       # Filtered by type: a CNAME answer carries the alias beside the records it leads to.
       def records(type, name)
+        raise ArgumentError, "no name to resolve" if name.nil?
+        raise NoSuchName, "no such name #{name}" unless resolvable?(name.to_s)
+
         answers = ask(name.to_s, type).answer.select { |record| record.type == type }
 
         if answers.any?
@@ -92,6 +95,15 @@ module MailResolver
       # Connect/send failures arrive as bare IOError/SocketError/SystemCallError from dnsruby's queue.
       rescue Dnsruby::ResolvError, IOError, SocketError, SystemCallError => error
         raise ServerFailure, "couldn't resolve #{type} #{name}: #{reason(error)}"
+      end
+
+      # As Go's resolver does: a name DNS can't carry can't exist, and isn't sent malformed.
+      # Dnsruby reads a backslash as an escape, which would ask for a different name.
+      def resolvable?(name)
+        name = name.delete_suffix(".")
+
+        name.bytesize.between?(1, 253) && !name.include?("\\") &&
+          name.split(".", -1).all? { |label| label.bytesize.between?(1, 63) }
       end
 
       # Dnsruby#query without its unbounded wait: a stuck I/O thread or a fork would block forever.

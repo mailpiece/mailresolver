@@ -74,7 +74,7 @@ Every method raises one of three errors instead of guessing:
 - `MailResolver::ServerFailure` — the server didn't say: SERVFAIL, REFUSED, or a transport failure (a connect that failed, a socket dnsruby couldn't open, an address that wouldn't resolve)
 - `MailResolver::Timeout` — no answer arrived in time
 
-All of them descend from `MailResolver::Error`. Malformed input is the caller's bug, not a DNS answer, and raises `ArgumentError` instead — `ptr("not an ip")`, for instance.
+All of them descend from `MailResolver::Error`. A name DNS can't carry — empty, an empty label, a label over 63 bytes, over 253 in all, or any backslash — raises `NoSuchName` without a query, since no such name can exist. Other malformed input is the caller's bug, not a DNS answer, and raises `ArgumentError` instead — `ptr("not an ip")`, or a `nil` name.
 
 ## Why This Distinction Exists
 
