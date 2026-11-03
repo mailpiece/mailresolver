@@ -4,6 +4,8 @@
 
 - `nameservers:` option, to ask given addresses instead of the system resolver.
 - Advertise a 1232-byte EDNS buffer, not dnsruby's 4096.
+- Raise `Timeout` at the deadline even when dnsruby's I/O thread is stuck.
+- Don't lose replies to a burst of queries on a fresh resolver.
 
 ## 0.6.0
 

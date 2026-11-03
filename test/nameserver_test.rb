@@ -78,4 +78,15 @@ class MailResolver::NameserverTest < MailResolver::TestCase
       assert_equal [ "v=DKIM1; k=rsa; p=MIGf" ], resolver.txt("sel._domainkey.example.com")
     end
   end
+
+  # Dnsruby sets up a resolver's I/O on its first send, unlocked, so a cold burst could lose replies.
+  def test_a_burst_of_queries_on_a_fresh_resolver_is_answered_in_full
+    record = Resolv::DNS::Resource::IN::TXT.new("v=spf1 -all")
+
+    LocalNameserver.answering(:noerror, records: [ record ], timeouts: [ 1 ]) do |resolver|
+      answers = 200.times.map { |i| Thread.new { resolver.txt("n#{i}.example.com") rescue $!.class } }.map(&:value)
+
+      assert_equal({ [ "v=spf1 -all" ] => 200 }, answers.tally)
+    end
+  end
 end

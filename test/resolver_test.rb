@@ -12,14 +12,21 @@ class MailResolver::ResolverTest < MailResolver::TestCase
       @queries = []
     end
 
-    def query(name, type)
-      @queries << [ name, type ]
+    def send_async(message, replies, id)
+      question = message.question.first
+      @queries << [ question.qname.to_s, question.qtype.to_s ]
 
       if @answer.is_a?(Exception)
-        raise @answer
+        replies.push([ id, nil, @answer ])
       else
-        Reply.new(@answer)
+        replies.push([ id, Reply.new(@answer), nil ])
       end
+    end
+  end
+
+  # Dnsruby whose I/O thread never answers, as after a fork or behind a stalled TCP connect.
+  class SilentDns < Dnsruby::Resolver
+    def send_async(*)
     end
   end
 
@@ -338,6 +345,15 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     end
 
     assert_includes error.message, "no usable nameserver"
+  end
+
+  def test_a_query_dnsruby_never_answers_times_out_at_the_deadline
+    resolver = MailResolver::Resolver.new(timeouts: [ 0.2 ])
+    resolver.instance_variable_set(:@resolver, SilentDns.new(nameserver: "127.0.0.1"))
+
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_raises(MailResolver::Timeout) { resolver.txt("example.com") }
+    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1
   end
 
   # dnsruby multiplexes concurrent queries over one I/O thread only when the object is shared.
