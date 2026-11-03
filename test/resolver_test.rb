@@ -310,6 +310,31 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_equal 0.5, resolver.retry_delay
   end
 
+  def test_nameservers_reach_dnsruby
+    resolver = MailResolver::Resolver.new(nameservers: [ "192.0.2.53", "2001:db8::53" ]).send(:resolver)
+
+    assert_equal [ "192.0.2.53", "2001:db8::53" ], resolver.config.nameserver
+  end
+
+  def test_one_nameserver_may_be_given_on_its_own
+    resolver = MailResolver::Resolver.new(nameservers: "192.0.2.53").send(:resolver)
+
+    assert_equal [ "192.0.2.53" ], resolver.config.nameserver
+  end
+
+  def test_without_nameservers_the_system_resolver_answers
+    assert_equal Dnsruby::Resolver.new.config.nameserver, MailResolver::Resolver.new.send(:resolver).config.nameserver
+  end
+
+  # Dnsruby would look a name up over the network, then drop it if it found nothing.
+  def test_a_nameserver_that_is_not_an_address_is_a_server_failure
+    error = assert_raises MailResolver::ServerFailure do
+      MailResolver::Resolver.new(nameservers: [ "192.0.2.53", "not an address" ]).txt("example.com")
+    end
+
+    assert_includes error.message, "no usable nameserver"
+  end
+
   # dnsruby multiplexes concurrent queries over one I/O thread only when the object is shared.
   def test_the_real_resolver_is_built_once
     resolver = MailResolver::Resolver.new

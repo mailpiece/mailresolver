@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `nameservers:` option, to ask given addresses instead of the system resolver.
+
 ## 0.6.0
 
 - `ns` lookup, on the resolver and the fake.

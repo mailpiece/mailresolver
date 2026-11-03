@@ -124,7 +124,7 @@ module MailResolver
         @socket.close
       end
 
-      # Overrides options so configuring a nameserver stays off the public API.
+      # Points the resolver's options at the loopback nameserver, whatever else they configure.
       class LocalResolver < Resolver
         def initialize(port, **options)
           super(**options)
@@ -133,7 +133,7 @@ module MailResolver
 
         private
           def options
-            { nameserver: "127.0.0.1", port: @port }
+            super.merge(nameserver: "127.0.0.1", port: @port)
           end
       end
 

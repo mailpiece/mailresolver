@@ -18,8 +18,10 @@ module MailResolver
     # Default: attempts at 0s, 5s, and 10s, over at 11s.
     TIMEOUTS = [ 5, 3, 3 ].freeze
 
-    def initialize(timeouts: TIMEOUTS)
+    # Nameservers are IP addresses, one or several; nil asks the system resolver.
+    def initialize(timeouts: TIMEOUTS, nameservers: nil)
       @timeouts = timeouts
+      @nameservers = nameservers
       @lock = Mutex.new
     end
 
@@ -128,13 +130,18 @@ module MailResolver
           end
         end
       rescue ArgumentError => error
-        # Dnsruby raises this when no configured nameserver is usable.
+        # Dnsruby raises this when no configured nameserver is usable, IPAddr when one isn't an address.
         raise ServerFailure, "no usable nameserver: #{error.message}"
       end
 
-      # Overridden by MailResolver::Testing::LocalNameserver to point at a loopback nameserver.
+      # Extended by MailResolver::Testing::LocalNameserver to point at a loopback nameserver.
+      # Addresses are checked here: dnsruby looks up a name it can't parse, and drops one it can't find.
       def options
-        {}
+        if @nameservers
+          { nameserver: Array(@nameservers).map { |address| IPAddr.new(address).to_s } }
+        else
+          {}
+        end
       end
   end
 end
