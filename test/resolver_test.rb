@@ -6,17 +6,20 @@ class MailResolver::ResolverTest < MailResolver::TestCase
 
   # Stands in for dnsruby so we test our mapping, not its ability to raise.
   class StubDns
-    attr_reader :queries
+    attr_reader :queries, :schedules
+    attr_accessor :query_timeout, :retry_delay
 
     def initialize(answer, rcode: Dnsruby::RCode::NOERROR, truncated: false)
       @answer = answer
       @rcode, @truncated = rcode, truncated
       @queries = []
+      @schedules = []
     end
 
     def send_async(message, replies, id)
       question = message.question.first
       @queries << [ question.qname.to_s, question.qtype.to_s ]
+      @schedules << [ query_timeout, retry_delay ]
 
       if @answer.is_a?(Exception)
         replies.push([ id, nil, @answer ])
@@ -35,16 +38,20 @@ class MailResolver::ResolverTest < MailResolver::TestCase
   class StubbedResolver < MailResolver::Resolver
     def initialize(answer, **reply)
       super()
-      @answer, @reply = answer, reply
+      @stub = StubDns.new(answer, **reply)
     end
 
     def queries
       resolver.queries
     end
 
+    def schedules
+      resolver.schedules
+    end
+
     private
       def resolver
-        @stub ||= StubDns.new(@answer, **@reply)
+        @stub
       end
   end
 
@@ -503,9 +510,55 @@ class MailResolver::ResolverTest < MailResolver::TestCase
     assert_same resolver.send(:resolver), resolver.send(:resolver)
   end
 
+  def test_a_deadline_cuts_each_query_to_the_time_left
+    resolver = answering([ record(:A, address: "192.0.2.1") ])
+
+    resolver.with_deadline(now + 5.5).a("example.com")
+    resolver.a("example.com")
+
+    timeout, delay = resolver.schedules.first
+    assert_in_delta 5.5, timeout, 0.1
+    assert_in_delta 1.25, delay, 0.1
+    assert_equal [ 11, 2.5 ], resolver.schedules.last
+  end
+
+  def test_a_deadline_further_off_than_the_timeouts_leaves_them_as_they_are
+    resolver = answering([ record(:A, address: "192.0.2.1") ])
+
+    resolver.with_deadline(now + 60).a("example.com")
+
+    assert_equal [ [ 11, 2.5 ] ], resolver.schedules
+  end
+
+  def test_a_passed_deadline_is_a_timeout_without_a_query
+    resolver = answering([ record(:A, address: "192.0.2.1") ])
+
+    assert_raises(MailResolver::Timeout) { resolver.with_deadline(now).a("example.com") }
+    assert_empty resolver.queries
+  end
+
+  # dnsruby multiplexes only when the object is shared, whichever resolver builds it first.
+  def test_a_resolver_with_a_deadline_shares_the_one_it_came_from
+    resolver = MailResolver::Resolver.new
+    assert_same resolver.with_deadline(now).send(:resolver), resolver.send(:resolver)
+
+    resolver = MailResolver::Resolver.new
+    assert_same resolver.send(:resolver), resolver.with_deadline(now).send(:resolver)
+  end
+
+  def test_a_deadline_that_is_not_a_time_is_an_argument_error
+    [ nil, "5", Float::NAN, Float::INFINITY, Complex(1, 1) ].each do |at|
+      assert_raises(ArgumentError, at.inspect) { MailResolver::Resolver.new.with_deadline(at) }
+    end
+  end
+
   private
     def answering(answer, **reply)
       StubbedResolver.new(answer, **reply)
+    end
+
+    def now
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
     end
 
     def silencing_warnings
