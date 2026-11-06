@@ -46,6 +46,18 @@ class MailResolver::NameserverTest < MailResolver::TestCase
     end
   end
 
+  def test_a_nameserver_that_never_replies_is_a_timeout_by_the_deadline
+    LocalNameserver.answering(nil, timeouts: MailResolver::Resolver::TIMEOUTS) do |resolver|
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      resolver = resolver.with_deadline(started + 0.3)
+
+      assert_raises(MailResolver::Timeout) { resolver.txt("example.com") }
+      assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 0.3 + MailResolver::Resolver::DEADLINE_MARGIN + 0.2
+
+      assert_raises(MailResolver::Timeout) { resolver.txt("example.com") }
+    end
+  end
+
   def test_a_txt_answer_arrives_over_the_wire_with_its_character_strings_joined
     record = Resolv::DNS::Resource::IN::TXT.new("v=spf1 include:_spf.example.com ", "-all")
 

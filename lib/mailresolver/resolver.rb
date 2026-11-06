@@ -39,6 +39,16 @@ module MailResolver
       @lock = Mutex.new
     end
 
+    # A resolver asking over this one's connection whose every query has its timeouts cut to end by +at+,
+    # a CLOCK_MONOTONIC time, and raises Timeout once it has passed.
+    def with_deadline(at)
+      unless at.is_a?(Numeric) && at.real? && at.finite?
+        raise ArgumentError, "deadline must be a monotonic time in seconds, not #{at.inspect}"
+      end
+
+      dup.tap { it.deadline_from(self, at) }
+    end
+
     # TXT character-strings are joined into one value (RFC 7208 §3.3).
     def txt(name)
       records("TXT", name).map { |record| record.strings.join }
@@ -76,6 +86,17 @@ module MailResolver
     def ns(name)
       records("NS", name).map { |record| record.domainname.to_s }
     end
+
+    protected
+      def deadline_from(origin, at)
+        @origin, @deadline = origin, at
+      end
+
+      # Built once, on first use under the lock, and shared so concurrent queries multiplex.
+      # Caching and DNSSEC are off — the former is process-global, the latter unused by callers.
+      def resolver
+        @resolver ||= @origin ? @origin.resolver : dns
+      end
 
     private
       def family(type, name)
@@ -141,11 +162,17 @@ module MailResolver
         message.do_caching = false
         message.do_validation = false
 
+        timeouts = timeouts_left || raise(Timeout, "out of time resolving #{type} #{name.inspect}")
         replies = Queue.new
-        # Dnsruby's default query id is the time plus a small random number, which can collide.
-        @lock.synchronize { resolver.send_async(message, replies, Object.new) }
 
-        _id, reply, error = replies.pop(timeout: @timeouts.sum + DEADLINE_MARGIN) ||
+        # Dnsruby reads its schedule as a query is sent, so each sets its own.
+        # Its default query id is the time plus a small random number, which can collide.
+        @lock.synchronize do
+          schedule(resolver, timeouts)
+          resolver.send_async(message, replies, Object.new)
+        end
+
+        _id, reply, error = replies.pop(timeout: timeouts.sum + DEADLINE_MARGIN) ||
           raise(Timeout, "timed out resolving #{type} #{name.inspect}")
         raise error if error
 
@@ -183,23 +210,35 @@ module MailResolver
         message.sub(/\s*\[".*\z/m, "")
       end
 
-      # Built once, on first use under the lock, and shared so concurrent queries multiplex.
-      # Caching and DNSSEC are off — the former is process-global, the latter unused by callers.
-      def resolver
-        @resolver ||= Dnsruby::Resolver.new(**options).tap do |dns|
+      # The timeouts scaled down to end by the deadline, or nil once it has passed.
+      def timeouts_left
+        if @deadline
+          remaining = @deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          @timeouts.map { it * [ remaining / @timeouts.sum, 1 ].min } if remaining.positive?
+        else
+          @timeouts
+        end
+      end
+
+      def dns
+        Dnsruby::Resolver.new(**options).tap do |dns|
           dns.dnssec = false
           dns.do_caching = false
           # DNS Flag Day 2020: a reply that would fragment comes back truncated and retries over TCP.
           dns.udp_size = 1232
-          dns.query_timeout = @timeouts.sum
           dns.packet_timeout = @timeouts.first
           dns.retry_times = @timeouts.size
-          # Dnsruby fires attempt n at 2^(n-1) times this; halving the first element lands the schedule.
-          dns.retry_delay = @timeouts.first / 2.0
+          schedule(dns, @timeouts)
         end
       rescue ArgumentError => error
         # Dnsruby raises this when no configured nameserver is usable, IPAddr when one isn't an address.
         raise ServerFailure, "no usable nameserver: #{error.message}"
+      end
+
+      # Dnsruby fires attempt n at 2^(n-1) times the retry delay; halving the first timeout lands the schedule.
+      def schedule(dns, timeouts)
+        dns.query_timeout = timeouts.sum
+        dns.retry_delay = timeouts.first / 2.0
       end
 
       # Extended by MailResolver::Testing::LocalNameserver to point at a loopback nameserver.

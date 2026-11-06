@@ -95,7 +95,7 @@ MailAuth.authenticate(raw, ip: ip, resolver: resolver)
 MtaSts.lookup(domain, known: nil, resolver: resolver)
 ```
 
-A resolver is safe to share across threads. dnsruby sends every query in the process over one I/O thread, whichever resolver it came from, so a resolver apiece costs no thread, only building dnsruby's resolver again — reading the system configuration — on each one's first query. Share one by default; build one per lookup when each lookup has a deadline of its own, with `timeouts` scaled to the time left.
+A resolver is safe to share across threads. dnsruby sends every query in the process over one I/O thread, whichever resolver it came from, so a resolver apiece costs no thread, only building dnsruby's resolver again — reading the system configuration — on each one's first query. Share one by default, and give a lookup with a deadline of its own a resolver from `with_deadline`, which asks over the same one: see [Deadlines](#deadlines).
 
 That one I/O thread is also why TCP matters: see [Configuration](#configuration).
 
@@ -110,6 +110,15 @@ MailResolver::Resolver.new(timeouts: [5, 3, 3])
 The nameserver must be reachable on TCP port 53 as well as UDP. An answer over 1232 bytes comes back truncated and dnsruby asks again over TCP, connecting from its one I/O thread: if TCP/53 is filtered, that connect blocks every lookup in the process for up to the first timeout. Each still raises `Timeout` at its own deadline.
 
 DNSSEC validation and dnsruby's answer cache are both off, unconditionally. DNSSEC costs a round trip that most callers of this gem have no way to act on — MTA-STS, for one, trusts the certificate on the policy host rather than the DNS answer. Caching is dnsruby's own concern to have off: its cache is process-global, so a nameserver that starts failing would otherwise keep serving its last good answer to every caller in the process.
+
+### Deadlines
+
+```ruby
+deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 8
+resolver.with_deadline(deadline).ptr("203.0.113.10")
+```
+
+By default a query has its whole schedule, however long its caller has. `with_deadline(at)` returns a resolver for a caller that must be done by `at`, a `CLOCK_MONOTONIC` time: each query's timeouts are scaled down to the time left, keeping their proportions, and once `at` has passed every query raises `Timeout` without being sent. It asks over the resolver it came from, so it costs no new dnsruby resolver, and the resolver it came from keeps its own schedule. A TCP connect still gets the first timeout in full; the caller still gets `Timeout` by `at`, plus the half second above.
 
 ## Custom Resolvers
 
