@@ -28,5 +28,5 @@ Gem::Specification.new do |spec|
   spec.require_paths = [ "lib" ]
 
   # Resolv collapses SERVFAIL/REFUSED into empty answers; dnsruby does not.
-  spec.add_dependency "dnsruby", "~> 1.74"
+  spec.add_dependency "dnsruby", ">= 1.74", "< 3.0"
 end
